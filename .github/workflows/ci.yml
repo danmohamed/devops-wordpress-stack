@@ -1,0 +1,58 @@
+name: Test Docker Compose Stack
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create test .env file
+        run: |
+          cat > .env << 'ENVEOF'
+          MYSQL_ROOT_PASSWORD=ci_root_password
+          MYSQL_DATABASE=wordpress
+          MYSQL_USER=wp_user
+          MYSQL_PASSWORD=ci_wp_password
+          WORDPRESS_PORT=8080
+          ENVEOF
+
+      - name: Validate docker-compose.yml
+        run: docker compose config
+
+      - name: Start the stack
+        run: docker compose up -d
+
+      - name: Wait for MySQL to be healthy
+        run: |
+          echo "Waiting for MySQL healthcheck..."
+          timeout 90 bash -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" wp_mysql)" == "healthy" ]; do sleep 3; echo "Still waiting..."; done'
+
+        # if wp_mysql is not healthy after 90s, this step fails the job
+
+      - name: Wait for WordPress to respond
+        run: |
+          echo "Waiting for WordPress to respond on port 8080..."
+          timeout 60 bash -c 'until curl -sf http://localhost:8080 > /dev/null; do sleep 3; echo "Still waiting..."; done'
+
+      - name: Show container status
+        if: always()
+        run: docker compose ps
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose logs db
+          docker compose logs wordpress
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
